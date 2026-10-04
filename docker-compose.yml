@@ -1,0 +1,94 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: monitoring_postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-monitoring_db}
+      POSTGRES_USER: ${DB_USER:-monitoring_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-monitoring_password}
+    ports:
+      - "${DB_PORT:-5613}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-monitoring_user} -d ${DB_NAME:-monitoring_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - monitoring_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: monitoring_redis
+    ports:
+      - "${REDIS_PORT:-6513}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - monitoring_network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: monitoring_backend
+    environment:
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-django-insecure-default-key-change-in-production}
+      - DEBUG=${DEBUG:-False}
+      - DB_NAME=${DB_NAME:-monitoring_db}
+      - DB_USER=${DB_USER:-monitoring_user}
+      - DB_PASSWORD=${DB_PASSWORD:-monitoring_password}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    ports:
+      - "${BACKEND_PORT:-3113}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    networks:
+      - monitoring_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/', timeout=5).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 40s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: monitoring_frontend
+    ports:
+      - "${FRONTEND_PORT:-8113}:80"
+    depends_on:
+      - backend
+    networks:
+      - monitoring_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    name: monitoring_postgres_data
+  redis_data:
+    name: monitoring_redis_data
+
+networks:
+  monitoring_network:
+    name: gb-82-monitoring-network
+    driver: bridge
